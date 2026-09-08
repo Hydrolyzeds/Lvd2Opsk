@@ -40,14 +40,7 @@ namespace Sekai
       FullComboDataHash = fcDataHash;
     }
   }
-
-  public enum MusicScoreEventType
-	{
-		BPM = 0,
-		HighSpeed = 1,
-		SeVolume = 2,
-		TimeSignature = 3
-	}
+  
 
   public class MusicScoreEventData
 	{
@@ -74,6 +67,14 @@ namespace Sekai
       this.ticks = ticks;
       this.changeValue = changeValue;
     }
+	}
+
+  public enum MusicScoreEventType
+	{
+		BPM = 0,
+		HighSpeed = 1,
+		SeVolume = 2,
+		TimeSignature = 3
 	}
 
   public class Note

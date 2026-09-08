@@ -63,8 +63,12 @@ public class ConvUtil
 
   public static (int, int) UnconvertLane(double lane, double size)
   {
-    double laneStart = Math.Clamp(lane - size + 5.5 + 0.5, 0, 11);
-    double laneEnd = Math.Clamp(lane + size + 5.5 - 1 + 0.5, 0, 11);
+    // uhhh this thing here is because sekai allows extended lanes UNLESS the center is out of bounds
+    double center = Math.Clamp(lane + 5.5, 0, 11);
+    double adjustment = lane + center - lane + 5.5;
+
+    double laneStart = adjustment - size + 6;
+    double laneEnd = adjustment + size + 5;
     return ((int)laneStart, (int)laneEnd);
   }
 
@@ -74,11 +78,44 @@ public class ConvUtil
     List<Entity> noteEntities = new List<Entity>();
     List<Entity> longEntities = new List<Entity>();
 
+    // unreturned
+    List<Entity> usedTimescaleGroups = new List<Entity>();
+
+    // filter unused layers from having hi-speeds changed
+    foreach (Entity entity in entities)
+    {
+      if (entity.archetype != "#TIMESCALE_GROUP")
+      {
+        continue;
+      }
+
+      bool used = entities.Any(checkEntity => NoteArchetypes.Concat(LongHeadArchetypes.Concat(LongTailArchetypes)).Contains(checkEntity.archetype) && 
+                               checkEntity.data.FirstOrDefault(d => d.name == "#TIMESCALE_GROUP" && d._ref == entity.name) != null);
+
+      if (used == true)
+      {
+        usedTimescaleGroups.Add(entity);
+      }
+    }
+
     foreach (Entity entity in entities)
     {
       if (EventDataArchetypes.Contains(entity.archetype))
       {
-        eventDataEntities.Add(entity);
+        if (entity.archetype == "#TIMESCALE_CHANGE")
+        {
+          string layerRef = entity.data.FirstOrDefault(d => d.name == "#TIMESCALE_GROUP")?._ref;
+          Entity layerEntity = entities.FirstOrDefault(e => e.name == layerRef);
+
+          if (layerEntity != null && usedTimescaleGroups.Contains(layerEntity))
+          {
+            eventDataEntities.Add(entity);
+          }
+        }
+        else
+        {
+          eventDataEntities.Add(entity);
+        }
       }
       else if (NoteArchetypes.Contains(entity.archetype))
       {
