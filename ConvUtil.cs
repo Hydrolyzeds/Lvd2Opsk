@@ -63,12 +63,8 @@ public class ConvUtil
 
   public static (int, int) UnconvertLane(double lane, double size)
   {
-    // uhhh this thing here is because sekai allows extended lanes UNLESS the center is out of bounds
-    double center = Math.Clamp(lane + 5.5, 0, 11);
-    double adjustment = lane + center - lane + 5.5;
-
-    double laneStart = adjustment - size + 6;
-    double laneEnd = adjustment + size + 5;
+    double laneStart = lane - size + 5.5 + 0.5;
+    double laneEnd = lane + size + 5.5 - 1 + 0.5;
     return ((int)laneStart, (int)laneEnd);
   }
 
