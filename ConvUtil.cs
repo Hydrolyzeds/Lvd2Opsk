@@ -56,6 +56,12 @@ public class ConvUtil
     "TransientHiddenTickNote",
   ];
 
+  public static string[] FlickHeadArchetypes =
+  [
+    "NormalHeadFlickNote",
+    "CriticalHeadFlickNote",
+  ];
+
   public static long Beat2Ticks(double beat)
   {
     return (long)(480L * beat);
@@ -168,6 +174,150 @@ public class ConvUtil
     }
 
     return outList.ToArray();
+  }
+
+  // walk Connector links to find hold/guide chains
+  public static List<Entity[]> BuildChains(Entity[] entities)
+  {
+    Dictionary<string, Entity> byName = entities.Where(e => e.name != null).ToDictionary(e => e.name, e => e);
+
+    List<(string headName, string tailName)> links = new List<(string, string)>();
+    foreach (Entity entity in entities)
+    {
+      if (entity.archetype != "Connector") continue;
+      Data head = entity.data.FirstOrDefault(d => d.name == "head");
+      Data tail = entity.data.FirstOrDefault(d => d.name == "tail");
+      if (head != null && tail != null)
+      {
+        links.Add((head._ref, tail._ref));
+      }
+    }
+
+    Dictionary<string, string> nextOf = new Dictionary<string, string>();
+    HashSet<string> hasIncoming = new HashSet<string>();
+    foreach ((string headName, string tailName) in links)
+    {
+      nextOf[headName] = tailName;
+      hasIncoming.Add(tailName);
+    }
+
+    List<string> chainHeadNames = nextOf.Keys.Where(n => !hasIncoming.Contains(n)).ToList();
+
+    List<Entity[]> chains = new List<Entity[]>();
+    HashSet<string> visited = new HashSet<string>();
+    foreach (string startName in chainHeadNames)
+    {
+      if (visited.Contains(startName)) continue;
+
+      List<Entity> chain = new List<Entity>();
+      string cur = startName;
+      while (cur != null && !visited.Contains(cur))
+      {
+        if (!byName.TryGetValue(cur, out Entity entity)) break;
+        chain.Add(entity);
+        visited.Add(cur);
+        nextOf.TryGetValue(cur, out cur);
+      }
+
+      if (chain.Count >= 2) chains.Add(chain.ToArray());
+    }
+
+    return chains;
+  }
+
+  // green or yellow guide, other than that would turned into green, null if not a guide
+  public static int? GetGuideKind(Entity[] chain)
+  {
+    foreach (Entity entity in chain)
+    {
+      Data segmentKindData = entity.data.FirstOrDefault(d => d.name == "segmentKind");
+      if (segmentKindData != null)
+      {
+        int kind = (int)segmentKindData.value;
+        if (kind >= 101 && kind <= 108)
+        {
+          return kind == 105 ? 105 : 103;
+        }
+      }
+    }
+    return null;
+  }
+
+  public static (Note[] notes, Note[] extraNotes) ProcessChain(Entity[] chain, ref int idCounter)
+  {
+    int? guideKind = GetGuideKind(chain);
+    bool isGuide = guideKind.HasValue;
+    NoteType guideType = guideKind == 105 ? NoteType.Critical : NoteType.Default;
+
+    // anchors don't have Critical/Normal in the name, so grab it off whatever entity does
+    NoteType holdType = NoteType.Default;
+    if (!isGuide)
+    {
+      foreach (Entity e in chain)
+      {
+        if (e.archetype.Contains("Critical")) { holdType = NoteType.Critical; break; }
+        if (e.archetype.Contains("Normal")) { holdType = NoteType.Default; break; }
+      }
+    }
+
+    List<Note> notes = new List<Note>();
+    List<Note> extraNotes = new List<Note>();
+
+    for (int i = 0; i < chain.Length; i++)
+    {
+      Entity entity = chain[i];
+      bool isFirst = i == 0;
+      bool isLast = i == chain.Length - 1;
+
+      long ticks = Beat2Ticks(entity.data.FirstOrDefault(d => d.name == "#BEAT").value);
+      (int, int) lanes = UnconvertLane(entity.data.FirstOrDefault(d => d.name == "lane").value,
+        entity.data.FirstOrDefault(d => d.name == "size").value);
+      NoteType type = isGuide ? guideType : holdType;
+      Data easeData = entity.data.FirstOrDefault(d => d.name == "connectorEase");
+      NoteLineType noteLineType = easeData != null ? GetNoteLineType((int)easeData.value) : NoteLineType.Linear;
+
+      NoteCategory category;
+      if (isGuide)
+      {
+        category = isFirst ? NoteCategory.Guide : isLast ? NoteCategory.GuideEnd : NoteCategory.GuideHidden;
+      }
+      else if (isFirst)
+      {
+        category = NoteCategory.FrictionHideLong;
+      }
+      else if (isLast)
+      {
+        category = NoteCategory.Long;
+      }
+      else
+      {
+        category = NoteCategory.Hidden;
+      }
+
+      NoteBaseType noteBaseType = GetNoteBaseType(category, isFirst, isLast, false);
+      int id = idCounter++;
+      Note note = new Note(id, ticks, lanes.Item1, lanes.Item2, category, type, 1.0, noteLineType,
+        noteBaseType, -1, -1, NoteDirection.Default, category == NoteCategory.Skip);
+      notes.Add(note);
+
+      // hold notes with flick head: add a separate flick note on top of the head
+      if (!isGuide && isFirst && FlickHeadArchetypes.Contains(entity.archetype))
+      {
+        Data dirData = entity.data.FirstOrDefault(d => d.name == "direction");
+        NoteDirection direction = dirData != null ? GetNoteDirection((int)dirData.value) : NoteDirection.Default;
+        int flickId = idCounter++;
+        extraNotes.Add(new Note(flickId, ticks, lanes.Item1, lanes.Item2, NoteCategory.Flick, type, 1.0,
+          NoteLineType.Linear, NoteBaseType.Flick, -1, -1, direction, false));
+      }
+    }
+
+    for (int i = 0; i < notes.Count - 1; i++)
+    {
+      notes[i].nextConnectionId = notes[i + 1].id;
+      notes[i + 1].previousConnectionId = notes[i].id;
+    }
+
+    return (notes.ToArray(), extraNotes.ToArray());
   }
 
   public static MusicScoreEventData ProcessEventData(Entity entity, int id)
