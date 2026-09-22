@@ -3,9 +3,6 @@
 # Next SEKAI LevelData => Open Sekai Score JSON
 
 This converter does not support:
-- Long notes with flick heads
-- Long notes with hidden heads
-- Guide notes
 - Ease In-Out
 - Ease Out-In
 - Dynamic Stages
@@ -15,6 +12,8 @@ This converter does not support:
 - Fake notes
 - Damage notes
 - Custom SFX
+
+Flick/hidden head long notes and guide notes: supported.
 
 Made by Gaven. ( @gaven1880 on most platforms )
 
@@ -69,7 +68,14 @@ eventDataList.Add(new MusicScoreEventData(
 (Entity[], Entity[], Entity[]) filteredEntities = ConvUtil.FilterEntities(levelData.entities);
 Entity[] eventDataEntities = filteredEntities.Item1;
 Entity[] noteEntities = filteredEntities.Item2;
-Entity[] longEntities = filteredEntities.Item3;
+Entity[] legacyLongEntities = filteredEntities.Item3;
+
+// grab hold/guide chains and keep them out of the old paths
+List<Entity[]> chains = ConvUtil.BuildChains(levelData.entities);
+HashSet<Entity> chainedEntities = new HashSet<Entity>(chains.SelectMany(c => c));
+
+noteEntities = noteEntities.Where(e => !chainedEntities.Contains(e)).ToArray();
+legacyLongEntities = legacyLongEntities.Where(e => !chainedEntities.Contains(e)).ToArray();
 
 int id = eventDataList.ToArray().Length + 1;
 
@@ -88,7 +94,7 @@ foreach (Entity entity in noteEntities)
 }
 
 // long notes
-foreach (Entity entity in longEntities)
+foreach (Entity entity in legacyLongEntities)
 {
   Note note = ConvUtil.ProcessNote(entity, id);
   note.NSName = entity.name;
@@ -98,15 +104,18 @@ foreach (Entity entity in longEntities)
 
 foreach (Note note in longList)
 {
-  Entity entity = longEntities.FirstOrDefault(e => e.name == note.NSName);
+  Entity entity = legacyLongEntities.FirstOrDefault(e => e.name == note.NSName);
   
   Data nextData = entity.data.FirstOrDefault(d => d.name == "next");
   if (nextData != null)
   {
     Note nextNote = longList.FirstOrDefault(n => n.NSName == nextData._ref);
 
-    note.nextConnectionId = nextNote.id;
-    nextNote.previousConnectionId = note.id;
+    if (nextNote != null)
+    {
+      note.nextConnectionId = nextNote.id;
+      nextNote.previousConnectionId = note.id;
+    }
   }
 }
 
@@ -115,8 +124,17 @@ foreach (Note note in longList)
   note.noteBaseType = ConvUtil.GetNoteBaseType(note.category, note.IsConnectedFirst, note.IsConnectedLast, note.IsSingle);
 }
 
+// holds w/ anchor or flick heads, plus guides
+List<Note> chainNoteList = new List<Note>();
+foreach (Entity[] chain in chains)
+{
+  (Note[] notes, Note[] extraNotes) = ConvUtil.ProcessChain(chain, ref id);
+  chainNoteList.AddRange(notes);
+  chainNoteList.AddRange(extraNotes);
+}
+
 MusicScoreEventData[] eventDataArray = eventDataList.ToArray();
-Note[] noteArray = noteList.Concat(longList).ToArray();
+Note[] noteArray = noteList.Concat(longList).Concat(chainNoteList).ToArray();
 
 MusicScoreMakerData score = new MusicScoreMakerData(
   1,
