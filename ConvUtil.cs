@@ -222,6 +222,9 @@ public class ConvUtil
       NoteLineType noteLineType = GetNoteLineType((int)entity.data.FirstOrDefault(data => data.name == "connectorEase").value);
       NoteBaseType noteBaseType = GetNoteBaseType(category, false, false, true);
       NoteDirection direction = GetNoteDirection((int)entity.data.FirstOrDefault(data => data.name == "direction").value);
+      Data isAttachedData = entity.data.FirstOrDefault(data => data.name == "isAttached");
+      bool isAttached = isAttachedData != null && (int)isAttachedData.value == 1;
+      bool isSkip = category == NoteCategory.Skip || (category == NoteCategory.Connection && isAttached);
 
       return new Note(
         id,
@@ -236,7 +239,7 @@ public class ConvUtil
         -1, // long notes will implement manually in Program.cs
         -1, // long notes will implement manually in Program.cs
         direction,
-        category == NoteCategory.Skip
+        isSkip
       );
     }
 
