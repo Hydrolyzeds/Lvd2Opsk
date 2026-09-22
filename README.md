@@ -10,6 +10,7 @@ This converter does not support:
 - Fake notes
 - Damage notes
 - Custom SFX
+
 Guide notes are only supported in Green and Yellow; other guide colors are converted to Green.
 
 ### Usage:
