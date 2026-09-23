@@ -69,16 +69,15 @@ public class ConvUtil
 
   public static (int, int) UnconvertLane(double lane, double size)
   {
-    double laneStart = lane - size + 5.5 + 0.5;
-    double laneEnd = lane + size + 5.5 - 1 + 0.5;
+    double laneStart = Math.Min(11, Math.Max(0, lane - size + 5.5 + 0.5));
+    double laneEnd = Math.Min(11, Math.Max(0, lane + size + 5.5 - 1 + 0.5));
     return ((int)laneStart, (int)laneEnd);
   }
 
-  public static (Entity[], Entity[], Entity[]) FilterEntities(Entity[] entities)
+  public static (Entity[], Entity[]) FilterEntities(Entity[] entities)
   {
     List<Entity> eventDataEntities = new List<Entity>();
     List<Entity> noteEntities = new List<Entity>();
-    List<Entity> longEntities = new List<Entity>();
 
     // unreturned
     List<Entity> usedTimescaleGroups = new List<Entity>();
@@ -123,82 +122,31 @@ public class ConvUtil
       {
         noteEntities.Add(entity);
       }
-      else if (LongHeadArchetypes.Contains(entity.archetype))
-      {
-        longEntities.Add(entity);
-
-        Entity[] followedEntities = FollowLongHead(entities, entity.name);
-        foreach (Entity followedEntity in followedEntities)
-        {
-          if (!longEntities.Contains(followedEntity))
-          {
-            longEntities.Add(followedEntity);
-          }
-        }
-      }
     }
 
-    return (eventDataEntities.ToArray(), noteEntities.ToArray(), longEntities.ToArray());
+    return (eventDataEntities.ToArray(), noteEntities.ToArray());
   }
 
-  public static Entity[] FollowLongHead(Entity[] entities, string targetName)
-  {
-    List<Entity> outList = new List<Entity>();
+  public static string[] ChainableArchetypes =
+    NoteArchetypes.Concat(LongHeadArchetypes).Concat(LongTailArchetypes).Concat(ConnectionArchetypes)
+    .Append("AnchorNote").ToArray();
 
-    Entity targetEntity = entities.FirstOrDefault(e => e.name == targetName);
-
-    if (targetEntity == null)
-    {
-      return outList.ToArray();
-    }
-
-    Data nextData = targetEntity.data.FirstOrDefault(data => data.name == "next");
-
-    if (nextData != null)
-    {
-      Entity nextEntity = entities.FirstOrDefault(e => e.name == nextData._ref);
-      if (nextEntity != null)
-      {
-        outList.Add(nextEntity);
-
-        Entity[] nexterEntities = FollowLongHead(entities, nextEntity.name);
-
-        foreach (Entity nexterEntity in nexterEntities)
-        {
-          if (!outList.Contains(nexterEntity))
-          {
-            outList.Add(nexterEntity);
-          }
-        }
-      }
-    }
-
-    return outList.ToArray();
-  }
-
-  // walk Connector links to find hold/guide chains
+  // walk `next` refs to find hold/guide chains
   public static List<Entity[]> BuildChains(Entity[] entities)
   {
     Dictionary<string, Entity> byName = entities.Where(e => e.name != null).ToDictionary(e => e.name, e => e);
 
-    List<(string headName, string tailName)> links = new List<(string, string)>();
-    foreach (Entity entity in entities)
-    {
-      if (entity.archetype != "Connector") continue;
-      Data head = entity.data.FirstOrDefault(d => d.name == "head");
-      Data tail = entity.data.FirstOrDefault(d => d.name == "tail");
-      if (head != null && tail != null)
-      {
-        links.Add((head._ref, tail._ref));
-      }
-    }
-
     Dictionary<string, string> nextOf = new Dictionary<string, string>();
     HashSet<string> hasIncoming = new HashSet<string>();
-    foreach ((string headName, string tailName) in links)
+    foreach (Entity entity in entities)
     {
-      nextOf[headName] = tailName;
-      hasIncoming.Add(tailName);
+      if (!ChainableArchetypes.Contains(entity.archetype)) continue;
+      Data nextData = entity.data.FirstOrDefault(d => d.name == "next");
+      if (nextData != null && entity.name != null)
+      {
+        nextOf[entity.name] = nextData._ref;
+        hasIncoming.Add(nextData._ref);
+      }
     }
 
     List<string> chainHeadNames = nextOf.Keys.Where(n => !hasIncoming.Contains(n)).ToList();
@@ -213,7 +161,7 @@ public class ConvUtil
       string cur = startName;
       while (cur != null && !visited.Contains(cur))
       {
-        if (!byName.TryGetValue(cur, out Entity entity)) break;
+        if (!byName.TryGetValue(cur, out Entity entity) || !ChainableArchetypes.Contains(entity.archetype)) break;
         chain.Add(entity);
         visited.Add(cur);
         nextOf.TryGetValue(cur, out cur);
@@ -225,7 +173,7 @@ public class ConvUtil
     return chains;
   }
 
-  // green or yellow guide, other than that would turned into green, null if not a guide
+  // green or yellow guide, null if not a guide
   public static int? GetGuideKind(Entity[] chain)
   {
     foreach (Entity entity in chain)
@@ -243,20 +191,71 @@ public class ConvUtil
     return null;
   }
 
-  public static (Note[] notes, Note[] extraNotes) ProcessChain(Entity[] chain, ref int idCounter)
+  // anchors don't have their own type, so their category depends on position;
+  // a flick head also gets hidden since the flick is spawned separately
+  public static NoteCategory GetChainMemberCategory(Entity entity, bool isFirst, bool isLast)
+  {
+    if (entity.archetype == "AnchorNote")
+    {
+      if (isFirst) return NoteCategory.FrictionHideLong;
+      if (isLast) return NoteCategory.FrictionHide;
+      return NoteCategory.Hidden;
+    }
+    if (isFirst && FlickHeadArchetypes.Contains(entity.archetype))
+    {
+      return NoteCategory.FrictionHideLong;
+    }
+    return GetNoteCategory(entity);
+  }
+
+  // 4 = in-out, 5 = out-in
+  public static bool IsSplitEase(int connectorEase)
+  {
+    return connectorEase == 4 || connectorEase == 5;
+  }
+
+  // finds the TransientHiddenTickNote marking the in-out/out-in split point
+  public static Entity FindSplitTick(Entity[] entities, string entityName)
+  {
+    foreach (Entity e in entities)
+    {
+      if (e.archetype != "TransientHiddenTickNote") continue;
+      Data attachHead = e.data.FirstOrDefault(d => d.name == "attachHead");
+      if (attachHead != null && attachHead._ref == entityName) return e;
+    }
+    return null;
+  }
+
+  public static double Lerp(double a, double b, double t)
+  {
+    return a + (b - a) * t;
+  }
+
+  public static (Note[] notes, Note[] extraNotes) ProcessChain(Entity[] chain, ref int idCounter, Entity[] allEntities)
   {
     int? guideKind = GetGuideKind(chain);
     bool isGuide = guideKind.HasValue;
     NoteType guideType = guideKind == 105 ? NoteType.Critical : NoteType.Default;
 
-    // anchors don't have Critical/Normal in the name, so grab it off whatever entity does
+    // a real head/tail archetype carries Critical/Normal in its name; a fully-anchor
+    // chain has none, so fall back to segmentKind (1 = Normal, 2 = Critical)
     NoteType holdType = NoteType.Default;
-    if (!isGuide)
+    bool holdTypeFound = false;
+    foreach (Entity e in chain)
+    {
+      if (e.archetype.Contains("Critical")) { holdType = NoteType.Critical; holdTypeFound = true; break; }
+      if (e.archetype.Contains("Normal")) { holdType = NoteType.Default; holdTypeFound = true; break; }
+    }
+    if (!isGuide && !holdTypeFound)
     {
       foreach (Entity e in chain)
       {
-        if (e.archetype.Contains("Critical")) { holdType = NoteType.Critical; break; }
-        if (e.archetype.Contains("Normal")) { holdType = NoteType.Default; break; }
+        Data segmentKindData = e.data.FirstOrDefault(d => d.name == "segmentKind");
+        if (segmentKindData != null)
+        {
+          holdType = (int)segmentKindData.value == 2 ? NoteType.Critical : NoteType.Default;
+          break;
+        }
       }
     }
 
@@ -269,38 +268,57 @@ public class ConvUtil
       bool isFirst = i == 0;
       bool isLast = i == chain.Length - 1;
 
-      long ticks = Beat2Ticks(entity.data.FirstOrDefault(d => d.name == "#BEAT").value);
-      (int, int) lanes = UnconvertLane(entity.data.FirstOrDefault(d => d.name == "lane").value,
-        entity.data.FirstOrDefault(d => d.name == "size").value);
+      double beat = entity.data.FirstOrDefault(d => d.name == "#BEAT").value;
+      long ticks = Beat2Ticks(beat);
+      double rawLane = entity.data.FirstOrDefault(d => d.name == "lane").value;
+      double rawSize = entity.data.FirstOrDefault(d => d.name == "size").value;
+      (int, int) lanes = UnconvertLane(rawLane, rawSize);
       NoteType type = isGuide ? guideType : holdType;
       Data easeData = entity.data.FirstOrDefault(d => d.name == "connectorEase");
-      NoteLineType noteLineType = easeData != null ? GetNoteLineType((int)easeData.value) : NoteLineType.Linear;
+      int easeValue = easeData != null ? (int)easeData.value : 1;
 
-      NoteCategory category;
-      if (isGuide)
-      {
-        category = isFirst ? NoteCategory.Guide : isLast ? NoteCategory.GuideEnd : NoteCategory.GuideHidden;
-      }
-      else if (isFirst)
-      {
-        category = NoteCategory.FrictionHideLong;
-      }
-      else if (isLast)
-      {
-        category = NoteCategory.Long;
-      }
-      else
-      {
-        category = NoteCategory.Hidden;
-      }
+      Entity splitTick = (!isGuide && !isLast && IsSplitEase(easeValue))
+        ? FindSplitTick(allEntities, entity.name) : null;
+      NoteLineType noteLineType = IsSplitEase(easeValue)
+        ? (easeValue == 4 ? NoteLineType.EaseIn : NoteLineType.EaseOut)
+        : GetNoteLineType(easeValue);
+
+      NoteCategory category = isGuide
+        ? (isFirst ? NoteCategory.Guide : isLast ? NoteCategory.GuideEnd : NoteCategory.GuideHidden)
+        : GetChainMemberCategory(entity, isFirst, isLast);
 
       NoteBaseType noteBaseType = GetNoteBaseType(category, isFirst, isLast, false);
+      Data isAttachedData = entity.data.FirstOrDefault(d => d.name == "isAttached");
+      bool isAttached = isAttachedData != null && (int)isAttachedData.value == 1;
+      bool isSkip = category == NoteCategory.Skip ||
+        ((category == NoteCategory.Connection || category == NoteCategory.Hidden) && isAttached);
       int id = idCounter++;
       Note note = new Note(id, ticks, lanes.Item1, lanes.Item2, category, type, 1.0, noteLineType,
-        noteBaseType, -1, -1, NoteDirection.Default, category == NoteCategory.Skip);
+        noteBaseType, -1, -1, NoteDirection.Default, isSkip);
       notes.Add(note);
 
-      // hold notes with flick head: add a separate flick note on top of the head
+      // in-out/out-in ease with a real split point: insert a hidden anchor at the
+      // split tick's position, interpolating lane/size to that point
+      if (splitTick != null)
+      {
+        Entity nextEntity = chain[i + 1];
+        double splitBeat = splitTick.data.FirstOrDefault(d => d.name == "#BEAT").value;
+        double nextBeat = nextEntity.data.FirstOrDefault(d => d.name == "#BEAT").value;
+        double frac = nextBeat == beat ? 0.5 : (splitBeat - beat) / (nextBeat - beat);
+        double nextLane = nextEntity.data.FirstOrDefault(d => d.name == "lane").value;
+        double nextSize = nextEntity.data.FirstOrDefault(d => d.name == "size").value;
+        double midLane = Lerp(rawLane, nextLane, frac);
+        double midSize = Lerp(rawSize, nextSize, frac);
+        (int, int) midLanes = UnconvertLane(midLane, midSize);
+        long midTicks = Beat2Ticks(splitBeat);
+        NoteLineType midLineType = easeValue == 4 ? NoteLineType.EaseOut : NoteLineType.EaseIn;
+        int midId = idCounter++;
+        Note midNote = new Note(midId, midTicks, midLanes.Item1, midLanes.Item2, NoteCategory.Hidden, type,
+          1.0, midLineType, NoteBaseType.HiddenConnection, -1, -1, NoteDirection.Default, false);
+        notes.Add(midNote);
+      }
+
+      // flick head hold: spawn a separate flick note on top of the head
       if (!isGuide && isFirst && FlickHeadArchetypes.Contains(entity.archetype))
       {
         Data dirData = entity.data.FirstOrDefault(d => d.name == "direction");
